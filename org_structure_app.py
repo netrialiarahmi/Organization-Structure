@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import networkx as nx
 import plotly.graph_objects as go
+import csv
 
 # --- CONFIGURATIONS ---
 st.set_page_config(page_title="Organization Structure", layout="wide")
@@ -12,8 +13,27 @@ st.title("🏢 Organization Structure Viewer")
 uploaded_file = st.file_uploader("Upload organization structure CSV file", type=["csv"])
 
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    st.success("✅ File uploaded successfully!")
+    # --- SAFE CSV READER ---
+    try:
+        sample = uploaded_file.read(2048).decode("utf-8")
+        uploaded_file.seek(0)
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+        delimiter = dialect.delimiter
+    except Exception:
+        delimiter = ";"
+
+    try:
+        df = pd.read_csv(
+            uploaded_file,
+            sep=delimiter,
+            engine="python",
+            encoding="utf-8",
+            on_bad_lines="warn"
+        )
+        st.success(f"✅ File uploaded successfully! Detected delimiter: '{delimiter}'")
+    except Exception as e:
+        st.error(f"❌ Error reading CSV file: {e}")
+        st.stop()
 
     # --- DISPLAY DATA ---
     st.subheader("Raw Data Preview")
@@ -24,9 +44,14 @@ if uploaded_file:
         hierarchy_cols = st.multiselect(
             "Select columns representing hierarchy (from top to bottom):",
             df.columns.tolist(),
-            default=df.columns[:-1].tolist(),
+            # auto pick last 3–4 levels if they exist (like Division → Dept → Section)
+            default=df.columns[-4:-1].tolist() if len(df.columns) >= 4 else df.columns[:-1].tolist(),
         )
-        name_col = st.selectbox("Select the column containing employee names:", df.columns.tolist(), index=len(df.columns) - 1)
+        name_col = st.selectbox(
+            "Select the column containing employee names:",
+            df.columns.tolist(),
+            index=1 if "NAMA" in df.columns else len(df.columns) - 1,
+        )
 
     # --- BUILD HIERARCHY TREE ---
     def build_hierarchy_with_names(df, cols, name_col):
@@ -34,8 +59,8 @@ if uploaded_file:
         for _, row in df.iterrows():
             d = hierarchy
             for col in cols[:-1]:
-                d = d.setdefault(str(row[col]), {})
-            d.setdefault(str(row[cols[-1]]), []).append(str(row[name_col]))
+                d = d.setdefault(str(row[col]).strip(), {})
+            d.setdefault(str(row[cols[-1]]).strip(), []).append(str(row[name_col]).strip())
         return hierarchy
 
     hierarchy = build_hierarchy_with_names(df, hierarchy_cols, name_col)
